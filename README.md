@@ -1,61 +1,107 @@
-# image-generation-api
-
-[![CI](https://github.com/mainlayer/image-generation-api/actions/workflows/ci.yml/badge.svg)](https://github.com/mainlayer/image-generation-api/actions/workflows/ci.yml)
+# Image Generation API
 
 A FastAPI service that generates images on demand with **per-image credit billing** via [Mainlayer](https://mainlayer.fr).
 
+This is a production-ready template for monetizing image generation APIs. Swap the mock generator for any real image model (Stable Diffusion, DALL-E, Flux, Midjourney, etc.) and billing is handled automatically.
+
 ## Features
 
-- `POST /generate` — generate an image from a text prompt
-- Per-call credit billing through Mainlayer payment tokens
-- Configurable output dimensions (64–2048 px) and format (png / jpeg / webp)
-- Ready to plug in any real image-generation backend
+- `POST /generate` — generate images from text prompts
+- Per-call credit billing: **1 credit per image** (configurable)
+- Configurable output dimensions (64–2048 px) and format (PNG, JPEG, WebP)
+- Mock generator for testing (replace with your model)
+- Full Mainlayer payment integration with HTTP 402 Payment Required
+- Deterministic mock generator for reproducible testing
+- Comprehensive error handling and logging
 
-## Quickstart
+## 5-Minute Quickstart
+
+### 1. Prerequisites
 
 ```bash
-pip install mainlayer
+git clone <this-repo>
+cd image-generation-api
+python -m venv venv
+source venv/bin/activate  # or: .\venv\Scripts\activate on Windows
 ```
 
+### 2. Install and configure
+
 ```bash
-export MAINLAYER_API_KEY=your_api_key
-export MAINLAYER_RESOURCE_ID=your_resource_id
+pip install -r requirements.txt
+cp .env.example .env
+
+# Edit .env with your Mainlayer credentials:
+# MAINLAYER_API_KEY=sk_live_...
+# MAINLAYER_RESOURCE_ID=res_...
+# MAINLAYER_ENABLED=false  # for local testing
+```
+
+### 3. Run the server
+
+```bash
+# Development with auto-reload
 uvicorn src.main:app --reload
+
+# Open http://localhost:8000/docs for interactive API docs
 ```
 
-### Generate an image
+### 4. Generate an image
 
 ```python
-import httpx, base64
+import httpx
+import base64
 
-resp = httpx.post(
+client = httpx.Client()
+
+response = client.post(
     "http://localhost:8000/generate",
-    json={"prompt": "A serene mountain lake", "width": 512, "height": 512, "format": "png"},
-    headers={"x-mainlayer-token": "<your-token>"},
+    json={
+        "prompt": "A serene mountain lake at sunset",
+        "width": 512,
+        "height": 512,
+        "format": "png",
+    },
+    headers={"x-mainlayer-token": "token_abc123"}
 )
-resp.raise_for_status()
-data = resp.json()
+
+data = response.json()
 with open("output.png", "wb") as f:
     f.write(base64.b64decode(data["image_b64"]))
+print(f"Generated {data['width']}x{data['height']} image ({data['credits_used']} credits)")
 ```
 
 ## API Reference
 
 ### `POST /generate`
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
+Generate an image from a text prompt.
+
+**Request:**
+```json
+{
+  "prompt": "A serene mountain lake at sunset",
+  "width": 512,
+  "height": 512,
+  "format": "png"
+}
+```
+
+**Headers:**
+- `x-mainlayer-token` (required) — Mainlayer payment token
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
 | `prompt` | string | required | Text description of the image |
 | `width` | int | 512 | Output width in pixels (64–2048) |
 | `height` | int | 512 | Output height in pixels (64–2048) |
 | `format` | string | `png` | Output format: `png`, `jpeg`, or `webp` |
 
-**Headers:** `x-mainlayer-token` (required)
-
-**Response:**
+**Response (200 OK):**
 ```json
 {
-  "image_b64": "<base64-encoded image>",
+  "image_b64": "iVBORw0KGgoAAAANSUhEUgAAA...",
   "format": "png",
   "width": 512,
   "height": 512,
@@ -63,13 +109,138 @@ with open("output.png", "wb") as f:
 }
 ```
 
-## Payment
+**Error (402 Payment Required):**
+```json
+{
+  "error": "payment_required",
+  "message": "Get access at mainlayer.fr",
+  "resource_id": "res_images_123"
+}
+```
 
-Access is gated through Mainlayer payment tokens. Get your token at [mainlayer.fr](https://mainlayer.fr).
+### Other Endpoints
 
-## Development
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/docs` | Interactive API documentation |
+
+## Pricing
+
+Configure when setting up your Mainlayer resource:
+
+| Model | Cost | Use Case |
+|-------|------|----------|
+| Per-image (1 credit) | $0.10 | Fixed cost per image |
+| Per-pixel ($0.00001/pixel) | Variable | Charged by output size |
+| Subscription | $49/mo | Unlimited images |
+
+## Using a Real Image Generator
+
+Replace the mock generator in `src/generator.py` with a real model:
+
+### Stable Diffusion (using Replicate API)
+
+```python
+import replicate
+
+def generate_image(prompt: str, width: int, height: int, fmt: str) -> str:
+    """Replace mock with real Stable Diffusion generation."""
+    output = replicate.run(
+        "stability-ai/stable-diffusion:db21e45d3f7023abc9e46f76bfdecf26",
+        input={"prompt": prompt, "width": width, "height": height}
+    )
+
+    # Download image and encode to base64
+    import httpx, base64
+    img_bytes = httpx.get(output[0]).content
+    return base64.b64encode(img_bytes).decode()
+```
+
+### DALL-E 3 (using OpenAI API)
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key="sk_...")
+
+def generate_image(prompt: str, width: int, height: int, fmt: str) -> str:
+    """Replace mock with real DALL-E 3 generation."""
+    response = client.images.generate(
+        model="dall-e-3",
+        prompt=prompt,
+        size=f"{width}x{height}",
+        n=1,
+        response_format="b64_json"
+    )
+    return response.data[0].b64_json
+```
+
+## Local Development (no payment)
+
+For testing without Mainlayer integration:
 
 ```bash
-pip install -e ".[dev]"
-pytest tests/
+MAINLAYER_ENABLED=false uvicorn src.main:app --reload
+
+# Now requests work without payment tokens
+curl http://localhost:8000/generate \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "A red car",
+    "width": 256,
+    "height": 256,
+    "format": "png"
+  }'
 ```
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MAINLAYER_API_KEY` | Yes* | — | Your Mainlayer API key |
+| `MAINLAYER_RESOURCE_ID` | Yes* | — | Mainlayer resource ID for image generation |
+| `MAINLAYER_ENABLED` | No | `true` | Set to `false` for local development |
+| `MAINLAYER_BASE_URL` | No | `https://api.mainlayer.fr` | Override Mainlayer endpoint |
+| `LOG_LEVEL` | No | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+| `PORT` | No | `8000` | Server port |
+
+*Required only if `MAINLAYER_ENABLED=true`
+
+## Running Tests
+
+```bash
+pytest tests/ -v
+
+# With coverage
+pytest tests/ --cov=src/
+```
+
+## Deployment
+
+### Docker
+
+```bash
+docker build -t image-generation-api .
+docker run -e MAINLAYER_API_KEY=sk_... -e MAINLAYER_RESOURCE_ID=res_... -p 8000:8000 image-generation-api
+```
+
+### Railway
+
+```bash
+railway up
+```
+
+### Fly.io
+
+```bash
+fly launch
+fly deploy
+```
+
+## Support
+
+- Docs: [docs.mainlayer.fr](https://docs.mainlayer.fr)
+- Issues: GitHub issues on this repository
+- Community: [mainlayer.fr/discord](https://mainlayer.fr/discord)
